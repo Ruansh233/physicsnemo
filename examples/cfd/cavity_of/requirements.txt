@@ -1,1 +1,2 @@
 foamlib>=1.5.0
+matplotlib>=3.8

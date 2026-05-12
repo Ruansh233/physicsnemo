@@ -25,9 +25,11 @@ from examples.cfd.cavity_of.deeponet_cavity import (
     CavityCaseMetaData,
     CavityDeepONetConfig,
     CavityPhysicalLimits,
+    TensorNormalizer,
     build_deeponet,
     build_sample_tensors,
     compute_reynolds_number,
+    compute_relative_l2,
     ensure_openfoam_environment,
     run_case_for_viscosity,
     validate_viscosity_and_reynolds,
@@ -191,6 +193,37 @@ def test_build_sample_tensors_rejects_velocity_length_mismatch():
 
     with pytest.raises(ValueError, match="Velocity field length"):
         build_sample_tensors(case=case, nu=1.0e-3)
+
+
+def test_tensor_normalizer_handles_constant_channels():
+    import torch
+
+    tensor = torch.tensor(
+        [
+            [1.0, 0.5],
+            [2.0, 0.5],
+            [3.0, 0.5],
+        ]
+    )
+    normalizer = TensorNormalizer.fit(tensor)
+    normalized = normalizer.transform(tensor)
+
+    assert normalizer.std[:, 1].item() == pytest.approx(1.0)
+    assert normalized[:, 1].tolist() == pytest.approx([0.0, 0.0, 0.0])
+    torch.testing.assert_close(normalizer.inverse(normalized), tensor)
+
+
+def test_compute_relative_l2_uses_absolute_error_for_zero_channels():
+    import torch
+
+    target = torch.tensor([[1.0, 0.0], [2.0, 0.0]])
+    prediction = torch.tensor([[1.0, 0.1], [2.0, -0.1]])
+
+    aggregate, channel_errors = compute_relative_l2(prediction, target)
+
+    assert aggregate > 0.0
+    assert channel_errors[0] == pytest.approx(0.0)
+    assert channel_errors[1] == pytest.approx(float(torch.linalg.vector_norm(prediction[:, 1])))
 
 
 def test_openfoam_environment_check(monkeypatch):

@@ -71,15 +71,23 @@ class CavityDeepONetConfig:
     nu_max: float = 1.0e-2
     reynolds_min: float = 10.0
     reynolds_max: float = 100.0
-    latent_dim: int = 64
-    branch_layers: int = 2
-    trunk_layers: int = 2
-    layer_size: int = 64
+    latent_dim: int = 128
+    branch_layers: int = 4
+    trunk_layers: int = 4
+    layer_size: int = 128
     activation_fn: str = "gelu"
-    learning_rate: float = 1.0e-3
-    train_steps: int = 0
+    learning_rate: float = 3.0e-3
+    weight_decay: float = 1.0e-6
+    train_steps: int = 1000
+    lbfgs_steps: int = 200
+    lbfgs_lr: float = 0.3
+    normalize_inputs: bool = True
+    normalize_targets: bool = True
     device: str = "cpu"
     dtype: str = "float32"
+    save_visualizations: bool = True
+    visualization_dir: str = str(Path(__file__).resolve().parent / "outputs" / "figures")
+    visualization_max_cases: int = 3
 
 
 @dataclass
@@ -90,6 +98,39 @@ class CavitySampleTensors:
     trunk_input: Tensor
     target: Tensor
     reynolds_number: float
+
+
+@dataclass(frozen=True)
+class TensorNormalizer:
+    r"""Per-channel affine normalizer for example tensors."""
+
+    mean: Tensor
+    std: Tensor
+
+    @classmethod
+    def fit(cls, tensor: Tensor) -> "TensorNormalizer":
+        r"""Fit a channel-wise normalizer with safe handling of constant channels."""
+        mean = tensor.mean(dim=0, keepdim=True)
+        std = tensor.std(dim=0, keepdim=True)
+        std = torch.where(std < 1.0e-8, torch.ones_like(std), std)
+        return cls(mean=mean, std=std)
+
+    @classmethod
+    def identity(cls, tensor: Tensor) -> "TensorNormalizer":
+        r"""Build a no-op normalizer matching the tensor feature dimension."""
+        feature_shape = (1, tensor.shape[-1])
+        return cls(
+            mean=torch.zeros(feature_shape, dtype=tensor.dtype, device=tensor.device),
+            std=torch.ones(feature_shape, dtype=tensor.dtype, device=tensor.device),
+        )
+
+    def transform(self, tensor: Tensor) -> Tensor:
+        r"""Normalize a tensor."""
+        return (tensor - self.mean) / self.std
+
+    def inverse(self, tensor: Tensor) -> Tensor:
+        r"""Map a normalized tensor back to physical units."""
+        return tensor * self.std + self.mean
 
 
 def _get_foam_case_cls() -> Any:
@@ -337,12 +378,15 @@ def train_deeponet(
     *,
     lr: float,
     steps: int,
+    weight_decay: float = 0.0,
+    lbfgs_steps: int = 0,
+    lbfgs_lr: float = 1.0,
 ) -> float:
     r"""Run a small supervised training loop and return final loss."""
-    if steps <= 0:
+    if steps <= 0 and lbfgs_steps <= 0:
         return float("nan")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = torch.nn.MSELoss()
 
     model.train()
@@ -354,7 +398,126 @@ def train_deeponet(
         loss.backward()
         optimizer.step()
         final_loss = float(loss.detach().cpu().item())
+
+    if lbfgs_steps > 0:
+        lbfgs_optimizer = torch.optim.LBFGS(
+            model.parameters(),
+            lr=lbfgs_lr,
+            max_iter=lbfgs_steps,
+            history_size=50,
+            line_search_fn="strong_wolfe",
+        )
+
+        def closure() -> Tensor:
+            lbfgs_optimizer.zero_grad(set_to_none=True)
+            pred = model(branch_input, trunk_input)
+            loss = criterion(pred, target)
+            loss.backward()
+            return loss
+
+        lbfgs_optimizer.step(closure)
+        with torch.no_grad():
+            final_loss = float(
+                criterion(model(branch_input, trunk_input), target).detach().cpu().item()
+            )
     return final_loss
+
+
+def compute_relative_l2(prediction: Tensor, target: Tensor) -> tuple[float, tuple[float, ...]]:
+    r"""Compute aggregate and channel-wise relative :math:`L^2` errors."""
+    aggregate = torch.linalg.vector_norm(prediction - target) / torch.linalg.vector_norm(target)
+    channel_errors: list[float] = []
+    for channel_idx in range(target.shape[-1]):
+        denominator = torch.linalg.vector_norm(target[:, channel_idx])
+        numerator = torch.linalg.vector_norm(prediction[:, channel_idx] - target[:, channel_idx])
+        if denominator <= 1.0e-12:
+            channel_errors.append(float(numerator.detach().cpu().item()))
+        else:
+            channel_errors.append(float((numerator / denominator).detach().cpu().item()))
+    return float(aggregate.detach().cpu().item()), tuple(channel_errors)
+
+
+def visualize_predictions(
+    model: DeepONet,
+    branch_input: Tensor,
+    trunk_input: Tensor,
+    target: Tensor,
+    output_dir: Path,
+    max_cases: int = 3,
+    branch_normalizer: TensorNormalizer | None = None,
+    trunk_normalizer: TensorNormalizer | None = None,
+    target_normalizer: TensorNormalizer | None = None,
+) -> None:
+    r"""Save side-by-side true/pred/error plots for ``(u,v,w,p)`` fields."""
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.tri as mtri
+    except ImportError as exc:
+        raise ImportError(
+            "matplotlib is required for visualization. Install with "
+            "`pip install matplotlib` or add it to your example environment."
+        ) from exc
+
+    if max_cases <= 0:
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    branch_model_input = (
+        branch_normalizer.transform(branch_input)
+        if branch_normalizer is not None
+        else branch_input
+    )
+    trunk_model_input = (
+        trunk_normalizer.transform(trunk_input) if trunk_normalizer is not None else trunk_input
+    )
+    model.eval()
+    with torch.no_grad():
+        pred = model(branch_model_input, trunk_model_input)
+        if target_normalizer is not None:
+            pred = target_normalizer.inverse(pred)
+
+    pred_np = pred.detach().cpu().numpy()
+    target_np = target.detach().cpu().numpy()
+    trunk_np = trunk_input.detach().cpu().numpy()
+    branch_np = branch_input.detach().cpu().numpy().reshape(-1)
+
+    # Group samples by viscosity value; each group corresponds to one OpenFOAM run.
+    unique_nu = np.unique(branch_np)
+    channel_names = model.output_channel_names
+    for case_idx, nu in enumerate(unique_nu[:max_cases]):
+        mask = np.isclose(branch_np, nu)
+        x = trunk_np[mask, 0]
+        y = trunk_np[mask, 1]
+        tri = mtri.Triangulation(x, y)
+
+        for channel_idx, channel_name in enumerate(channel_names):
+            truth_field = target_np[mask, channel_idx]
+            pred_field = pred_np[mask, channel_idx]
+            diff_field = np.abs(pred_field - truth_field)
+
+            fig, ax = plt.subplots(1, 3, figsize=(18, 5), constrained_layout=True)
+            vmin = float(np.min(truth_field))
+            vmax = float(np.max(truth_field))
+
+            true_plot = ax[0].tricontourf(tri, truth_field, levels=50, vmin=vmin, vmax=vmax)
+            pred_plot = ax[1].tricontourf(tri, pred_field, levels=50, vmin=vmin, vmax=vmax)
+            diff_plot = ax[2].tricontourf(tri, diff_field, levels=50)
+            fig.colorbar(true_plot, ax=ax[0])
+            fig.colorbar(pred_plot, ax=ax[1])
+            fig.colorbar(diff_plot, ax=ax[2])
+
+            ax[0].set_title("True")
+            ax[1].set_title("Pred")
+            ax[2].set_title("Difference")
+            for axis in ax:
+                axis.set_xlabel("x")
+                axis.set_ylabel("y")
+                axis.set_aspect("equal", adjustable="box")
+
+            fig.suptitle(f"nu={nu:.6g}, field={channel_name}")
+            out_file = output_dir / f"case_{case_idx:03d}_nu_{nu:.6g}_{channel_name}.png"
+            fig.savefig(out_file, dpi=200)
+            plt.close(fig)
 
 
 def _load_config(config_path: Path | None) -> CavityDeepONetConfig:
@@ -374,27 +537,80 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
+    if cfg.train_steps <= 0 and cfg.save_visualizations:
+        raise ValueError(
+            "train_steps must be > 0 when save_visualizations=True. "
+            "Otherwise visualized predictions are from an untrained model."
+        )
+
     model = build_deeponet(cfg).to(cfg.device)
     branch_input, trunk_input, target = generate_dataset(cfg)
     branch_input = branch_input.to(cfg.device)
     trunk_input = trunk_input.to(cfg.device)
     target = target.to(cfg.device)
 
+    branch_normalizer = (
+        TensorNormalizer.fit(branch_input)
+        if cfg.normalize_inputs
+        else TensorNormalizer.identity(branch_input)
+    )
+    trunk_normalizer = (
+        TensorNormalizer.fit(trunk_input)
+        if cfg.normalize_inputs
+        else TensorNormalizer.identity(trunk_input)
+    )
+    target_normalizer = (
+        TensorNormalizer.fit(target)
+        if cfg.normalize_targets
+        else TensorNormalizer.identity(target)
+    )
+    model_branch_input = branch_normalizer.transform(branch_input)
+    model_trunk_input = trunk_normalizer.transform(trunk_input)
+    model_target = target_normalizer.transform(target)
+
     final_loss = train_deeponet(
         model,
-        branch_input=branch_input,
-        trunk_input=trunk_input,
-        target=target,
+        branch_input=model_branch_input,
+        trunk_input=model_trunk_input,
+        target=model_target,
         lr=cfg.learning_rate,
         steps=cfg.train_steps,
+        weight_decay=cfg.weight_decay,
+        lbfgs_steps=cfg.lbfgs_steps,
+        lbfgs_lr=cfg.lbfgs_lr,
     )
+
+    model.eval()
+    with torch.no_grad():
+        normalized_prediction = model(model_branch_input, model_trunk_input)
+        prediction = target_normalizer.inverse(normalized_prediction)
+    relative_l2, channel_relative_l2 = compute_relative_l2(prediction, target)
 
     print(f"Branch tensor shape: {tuple(branch_input.shape)}")
     print(f"Trunk tensor shape:  {tuple(trunk_input.shape)}")
     print(f"Target tensor shape: {tuple(target.shape)}")
     print(f"Output channel names: {model.output_channel_names}")
-    if cfg.train_steps > 0:
-        print(f"Final training loss after {cfg.train_steps} steps: {final_loss:.6e}")
+    if cfg.train_steps > 0 or cfg.lbfgs_steps > 0:
+        print(
+            "Final normalized training loss after "
+            f"{cfg.train_steps} AdamW steps and {cfg.lbfgs_steps} LBFGS steps: {final_loss:.6e}"
+        )
+        print(f"Physical aggregate rel-L2: {relative_l2:.6e}")
+        for channel_name, channel_error in zip(model.output_channel_names, channel_relative_l2):
+            print(f"Physical rel-L2[{channel_name}]: {channel_error:.6e}")
+    if cfg.save_visualizations:
+        visualize_predictions(
+            model=model,
+            branch_input=branch_input,
+            trunk_input=trunk_input,
+            target=target,
+            output_dir=Path(cfg.visualization_dir),
+            max_cases=cfg.visualization_max_cases,
+            branch_normalizer=branch_normalizer,
+            trunk_normalizer=trunk_normalizer,
+            target_normalizer=target_normalizer,
+        )
+        print(f"Saved visualization figures to: {cfg.visualization_dir}")
 
 
 if __name__ == "__main__":
