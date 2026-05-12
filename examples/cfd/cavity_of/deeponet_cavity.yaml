@@ -1,0 +1,18 @@
+case_path: examples/cfd/cavity_of/cavity
+run_root: examples/cfd/cavity_of/.foamlib_runs
+run_openfoam: true
+clean_run_root: false
+viscosity_values: [1.0e-3, 5.0e-3, 1.0e-2]
+nu_min: 1.0e-3
+nu_max: 1.0e-2
+reynolds_min: 10.0
+reynolds_max: 100.0
+latent_dim: 64
+branch_layers: 2
+trunk_layers: 2
+layer_size: 64
+activation_fn: gelu
+learning_rate: 1.0e-3
+train_steps: 0
+device: cpu
+dtype: float32
