@@ -36,6 +36,14 @@ from examples.cfd.cavity_of.deeponet_cavity import (
 )
 
 
+def test_cavity_deeponet_package_exports_match_legacy_module():
+    from examples.cfd.cavity_of.cavity_deeponet import (
+        CavityDeepONetConfig as PackageConfig,
+    )
+
+    assert PackageConfig().activation_fn == CavityDeepONetConfig().activation_fn
+
+
 class _FakeTransportProperties(dict):
     def __enter__(self):
         return self
@@ -232,7 +240,9 @@ def test_openfoam_environment_check(monkeypatch):
             return None
         return f"/usr/bin/{cmd}"
 
-    monkeypatch.setattr("examples.cfd.cavity_of.deeponet_cavity.shutil.which", _fake_which)
+    monkeypatch.setattr(
+        "examples.cfd.cavity_of.cavity_deeponet.openfoam_data.shutil.which", _fake_which
+    )
     with pytest.raises(RuntimeError, match="Missing required OpenFOAM commands"):
         ensure_openfoam_environment()
 
@@ -241,10 +251,12 @@ def test_run_case_for_viscosity_with_mocked_foamlib(monkeypatch, tmp_path):
     _FakeFoamCase.source_instances = []
     _FakeFoamCase.clone_instances = []
     monkeypatch.setattr(
-        "examples.cfd.cavity_of.deeponet_cavity._get_foam_case_cls", lambda: _FakeFoamCase
+        "examples.cfd.cavity_of.cavity_deeponet.openfoam_data.get_foam_case_cls",
+        lambda: _FakeFoamCase,
     )
     monkeypatch.setattr(
-        "examples.cfd.cavity_of.deeponet_cavity.ensure_openfoam_environment", lambda: None
+        "examples.cfd.cavity_of.cavity_deeponet.openfoam_data.ensure_openfoam_environment",
+        lambda: None,
     )
 
     cfg = CavityDeepONetConfig(
