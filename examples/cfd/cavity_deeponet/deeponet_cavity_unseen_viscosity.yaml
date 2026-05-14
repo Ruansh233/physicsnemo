@@ -4,8 +4,8 @@ run_openfoam: true
 clean_run_root: false
 
 # Keep train and test disjoint for true unseen-viscosity evaluation.
-train_viscosity_values: [1.0e-3, 5.0e-3]
-test_viscosity_values: [7.5e-3, 1.0e-2]
+train_viscosity_values: [1.0e-3, 5.0e-3, 1.0e-2]
+test_viscosity_values: [2.5e-3, 7.5e-3]
 
 nu_min: 1.0e-3
 nu_max: 1.0e-2

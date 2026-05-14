@@ -185,9 +185,9 @@ sbatch_logs/
 # Large/local artifacts from CFD and operator-learning experiments
 model.onnx.data
 /deeponet/
-examples/cfd/cavity_of/.foamlib_runs*/
-examples/cfd/cavity_of/cavity/
-examples/cfd/cavity_of/data/*.pt
-examples/cfd/cavity_of/data/*metrics*.json
+examples/cfd/cavity_deeponet/.foamlib_runs*/
+examples/cfd/cavity_deeponet/cavity/
+examples/cfd/cavity_deeponet/data/*.pt
+examples/cfd/cavity_deeponet/data/*metrics*.json
 examples/cfd/darcy_physics_informed/datasets/
 examples/cfd/darcy_physics_informed/outputs_pino/
