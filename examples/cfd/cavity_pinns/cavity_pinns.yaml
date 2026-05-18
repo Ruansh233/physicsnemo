@@ -1,4 +1,4 @@
-case_path: examples/cfd/cavity_deeponet/cavity
+case_path: examples/cfd/cavity_pinns/cavity
 run_root: examples/cfd/cavity_pinns/.foamlib_runs_pinn
 run_openfoam: true
 clean_run_root: false
@@ -21,7 +21,7 @@ unseen_case_count: 0
 manifest_filename: viscosity_split_manifest.json
 
 model_layers: 4
-model_layer_size: 128
+model_layer_size: 64
 activation_fn: tanh
 
 train_steps: 5000
@@ -32,8 +32,8 @@ boundary_loss_weight: 1.0
 boundary_loss_ramp_steps: 500
 physics_loss_weight: 1.0e-1
 physics_loss_ramp_steps: 1000
-boundary_points_per_wall: 64
-log_every: 200
+boundary_points_per_wall: 20
+log_every: 50
 
 save_visualizations: true
 visualization_max_cases: 3
