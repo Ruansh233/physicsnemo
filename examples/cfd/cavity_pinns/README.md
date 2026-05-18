@@ -31,6 +31,9 @@ of2312
 
 The runner checks `blockMesh`, `icoFoam`, and `postProcess` availability and
 fails fast if OpenFOAM is not active.
+When OpenFOAM snapshots are generated, each run case reuses the shared
+reference `constant/polyMesh` through a symlink, so `blockMesh` is not rerun
+for every viscosity sample.
 
 ## Run Standard Train/Validate/Test Workflow
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ from examples.cfd.cavity_pinns.cavity_pinns.openfoam_data import (
     build_case_tensors,
     ensure_openfoam_environment,
     get_foam_case_cls,
+    run_case_for_viscosity,
 )
 from examples.cfd.cavity_pinns.cavity_pinns.physics import (
     compute_physics_residuals,
@@ -113,6 +115,89 @@ class _FakeFoamCase:
         if idx in (-1, "0.5", 0.5):
             return self._time1
         raise KeyError(idx)
+
+
+def test_run_case_for_viscosity_reuses_reference_mesh_symlink(tmp_path, monkeypatch):
+    source_case_path = tmp_path / "source_case"
+    source_mesh_path = source_case_path / "constant" / "polyMesh"
+    source_mesh_path.mkdir(parents=True)
+    (source_mesh_path / "points").write_text("mesh", encoding="utf-8")
+
+    class _FakeTransportProperties:
+        def __init__(self):
+            self.data = {"nu": None}
+
+        def __enter__(self):
+            return self.data
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeRunCase:
+        def __init__(self, path: Path):
+            self.path = Path(path)
+            self.block_mesh_dict = {"scale": 0.1}
+            self.transport_properties = _FakeTransportProperties()
+            moving_wall = {"movingWall": _FakeBoundaryValue(np.array([1.0, 0.0, 0.0]))}
+            self._time0 = _FakeTimeDirectory(
+                time=0.0,
+                fields={
+                    "U": _FakeField(np.zeros((1, 3)), moving_wall),
+                    "p": _FakeField(np.zeros(1)),
+                },
+                centers=np.array([[0.0, 0.0, 0.0]]),
+            )
+
+        def clone(self, dst):
+            shutil.copytree(self.path, dst, symlinks=True)
+            return type(self)(dst)
+
+        def __getitem__(self, idx):
+            if idx in (0, "0", 0.0):
+                return self._time0
+            raise KeyError(idx)
+
+        def block_mesh(self):
+            raise AssertionError("blockMesh should not run for each generated case")
+
+        def run(self, command):
+            self.last_command = command
+
+    expected_sample = CavityCaseTensors(
+        coordinates=torch.tensor([[0.0, 0.0]], dtype=torch.float32),
+        viscosity=torch.tensor([[1.0e-3]], dtype=torch.float32),
+        target=torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float32),
+        reynolds_number=100.0,
+        metadata=CavityCaseMetaData(lid_velocity=1.0, length_scale=0.1),
+    )
+
+    monkeypatch.setattr(
+        "examples.cfd.cavity_pinns.cavity_pinns.openfoam_data.get_foam_case_cls",
+        lambda: _FakeRunCase,
+    )
+    monkeypatch.setattr(
+        "examples.cfd.cavity_pinns.cavity_pinns.openfoam_data.ensure_openfoam_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "examples.cfd.cavity_pinns.cavity_pinns.openfoam_data.build_case_tensors",
+        lambda **kwargs: expected_sample,
+    )
+
+    config = CavityPINNConfig(
+        case_path=str(source_case_path),
+        run_root=str(tmp_path / "runs"),
+        run_openfoam=True,
+        spatial_dim=2,
+        device="cpu",
+    )
+
+    result = run_case_for_viscosity(nu=1.0e-3, config=config, sample_index=0)
+
+    mesh_path = Path(config.run_root) / "nu_000_0.001" / "constant" / "polyMesh"
+    assert mesh_path.is_symlink()
+    assert mesh_path.resolve() == source_mesh_path.resolve()
+    torch.testing.assert_close(result.coordinates, expected_sample.coordinates)
 
 
 def test_openfoam_environment_check(monkeypatch):

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,48 @@ def ensure_openfoam_environment(commands: Sequence[str] = REQUIRED_OPENFOAM_COMM
             f"Missing required OpenFOAM commands: {missing_str}. "
             "Activate OpenFOAM first (for this workspace, run `of2312`)."
         )
+
+
+def _poly_mesh_path(case_path: Path) -> Path:
+    return case_path / "constant" / "polyMesh"
+
+
+def _resolve_reference_poly_mesh(source_case: Any, run_root: Path) -> Path:
+    source_case_path = Path(source_case.path)
+    source_poly_mesh = _poly_mesh_path(source_case_path)
+    if source_poly_mesh.exists():
+        return source_poly_mesh
+
+    reference_case_path = run_root / "_reference_mesh_case"
+    reference_poly_mesh = _poly_mesh_path(reference_case_path)
+    if reference_poly_mesh.exists():
+        return reference_poly_mesh
+
+    if reference_case_path.exists():
+        shutil.rmtree(reference_case_path)
+
+    reference_case = source_case.clone(reference_case_path)
+    if reference_poly_mesh.exists():
+        return reference_poly_mesh
+
+    ensure_openfoam_environment()
+    reference_case.block_mesh()
+    if not reference_poly_mesh.exists():
+        raise RuntimeError("Failed to build the shared reference polyMesh.")
+    return reference_poly_mesh
+
+
+def _link_poly_mesh_from_reference_case(case: Any, reference_poly_mesh: Path) -> None:
+    target_poly_mesh = _poly_mesh_path(Path(case.path))
+    if target_poly_mesh.exists() or target_poly_mesh.is_symlink():
+        if target_poly_mesh.is_dir() and not target_poly_mesh.is_symlink():
+            shutil.rmtree(target_poly_mesh)
+        else:
+            target_poly_mesh.unlink()
+
+    target_poly_mesh.parent.mkdir(parents=True, exist_ok=True)
+    relative_reference = os.path.relpath(reference_poly_mesh, start=target_poly_mesh.parent)
+    target_poly_mesh.symlink_to(relative_reference, target_is_directory=True)
 
 
 def _to_numpy(value: Any) -> np.ndarray:
@@ -179,7 +222,8 @@ def run_case_for_viscosity(
 
     if config.run_openfoam:
         ensure_openfoam_environment()
-        cloned_case.block_mesh()
+        reference_poly_mesh = _resolve_reference_poly_mesh(source_case, run_root)
+        _link_poly_mesh_from_reference_case(cloned_case, reference_poly_mesh)
         cloned_case.run("icoFoam")
 
     sample = build_case_tensors(

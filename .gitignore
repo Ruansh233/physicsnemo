@@ -190,5 +190,6 @@ examples/cfd/cavity_deeponet/cavity/
 examples/cfd/cavity_deeponet/data/*.pt
 examples/cfd/cavity_deeponet/data/*metrics*.json
 examples/cfd/cavity_pinns/.foamlib_runs*/
+examples/cfd/cavity_pinns/cavity/
 examples/cfd/darcy_physics_informed/datasets/
 examples/cfd/darcy_physics_informed/outputs_pino/
