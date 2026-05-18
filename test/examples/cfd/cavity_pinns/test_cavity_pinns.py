@@ -36,7 +36,9 @@ from examples.cfd.cavity_pinns.cavity_pinns.visualization import (
 from examples.cfd.cavity_pinns.cavity_pinns.workflow import (
     _build_boundary_condition_tensors,
     _build_normalization_stats,
+    _load_trained_checkpoint,
     _predict_physical_fields,
+    _save_trained_checkpoint,
 )
 
 
@@ -320,3 +322,37 @@ def test_visualization_writes_triptych_outputs(tmp_path):
 
     generated = sorted((tmp_path / "test").glob("*.png"))
     assert len(generated) == 3
+
+
+def test_checkpoint_save_and_load_round_trip(tmp_path):
+    config = CavityPINNConfig(model_layers=1, model_layer_size=8, spatial_dim=2, device="cpu")
+    model = CavityPINN(
+        in_features=3,
+        out_features=3,
+        hidden_layers=1,
+        hidden_size=8,
+        activation_fn="tanh",
+    )
+    normalizer = _build_normalization_stats(
+        coordinates=torch.tensor([[0.0, 0.0], [0.1, 0.1]], dtype=torch.float32),
+        viscosity=torch.tensor([[1.0e-3], [1.0e-2]], dtype=torch.float32),
+        target=torch.tensor([[1.0, -1.0, 10.0], [3.0, 1.0, 20.0]], dtype=torch.float32),
+    )
+    ckpt = tmp_path / "model.pt"
+
+    _save_trained_checkpoint(
+        checkpoint_path=ckpt,
+        model=model,
+        normalizer=normalizer,
+        config=config,
+    )
+
+    loaded_model, loaded_normalizer = _load_trained_checkpoint(
+        checkpoint_path=ckpt,
+        config=config,
+    )
+    assert isinstance(loaded_model, CavityPINN)
+    torch.testing.assert_close(normalizer.input_mean, loaded_normalizer.input_mean)
+    torch.testing.assert_close(normalizer.input_scale, loaded_normalizer.input_scale)
+    torch.testing.assert_close(normalizer.output_mean, loaded_normalizer.output_mean)
+    torch.testing.assert_close(normalizer.output_scale, loaded_normalizer.output_scale)

@@ -49,6 +49,54 @@ class NormalizationStats:
         )
 
 
+def _save_trained_checkpoint(
+    *,
+    checkpoint_path: Path,
+    model: torch.nn.Module,
+    normalizer: NormalizationStats,
+    config: CavityPINNConfig,
+) -> None:
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "normalizer": {
+            "input_mean": normalizer.input_mean.detach().cpu(),
+            "input_scale": normalizer.input_scale.detach().cpu(),
+            "output_mean": normalizer.output_mean.detach().cpu(),
+            "output_scale": normalizer.output_scale.detach().cpu(),
+        },
+        "model_config": {
+            "spatial_dim": config.spatial_dim,
+            "model_layers": config.model_layers,
+            "model_layer_size": config.model_layer_size,
+            "activation_fn": config.activation_fn,
+        },
+    }
+    torch.save(payload, checkpoint_path)
+    print(f"Saved model checkpoint to: {checkpoint_path}")
+
+
+def _load_trained_checkpoint(
+    *,
+    checkpoint_path: Path,
+    config: CavityPINNConfig,
+) -> tuple[torch.nn.Module, NormalizationStats]:
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    payload = torch.load(checkpoint_path, map_location=config.device)
+    model = build_pinn_model(config).to(config.device)
+    model.load_state_dict(payload["model_state_dict"])
+    norm_payload = payload["normalizer"]
+    normalizer = NormalizationStats(
+        input_mean=norm_payload["input_mean"].to(config.device),
+        input_scale=norm_payload["input_scale"].to(config.device),
+        output_mean=norm_payload["output_mean"].to(config.device),
+        output_scale=norm_payload["output_scale"].to(config.device),
+    )
+    print(f"Loaded model checkpoint from: {checkpoint_path}")
+    return model, normalizer
+
+
 def _stack_cases(cases: list[CavityCaseTensors]) -> tuple[Tensor, Tensor, Tensor]:
     if not cases:
         raise ValueError("Expected at least one case for stacking.")
@@ -453,6 +501,12 @@ def run_training_workflow(config: CavityPINNConfig) -> None:
     model, physics_informer, normalizer = _train_model(
         config=config, train_cases=train_cases
     )
+    _save_trained_checkpoint(
+        checkpoint_path=Path(config.model_checkpoint_path),
+        model=model,
+        normalizer=normalizer,
+        config=config,
+    )
     _evaluate_split(
         model=model,
         physics_informer=physics_informer,
@@ -493,9 +547,25 @@ def run_unseen_viscosity_workflow(config: CavityPINNConfig) -> None:
     train_cases = _load_split_cases(config, manifest["train"], "train")
     unseen_cases = _load_split_cases(config, manifest["unseen"], "unseen")
 
-    model, physics_informer, normalizer = _train_model(
-        config=config, train_cases=train_cases
-    )
+    checkpoint_path = Path(config.model_checkpoint_path)
+    if config.use_saved_model_for_unseen:
+        model, normalizer = _load_trained_checkpoint(
+            checkpoint_path=checkpoint_path,
+            config=config,
+        )
+        physics_informer = make_physics_informer(
+            spatial_dim=config.spatial_dim, device=config.device
+        )
+    else:
+        model, physics_informer, normalizer = _train_model(
+            config=config, train_cases=train_cases
+        )
+        _save_trained_checkpoint(
+            checkpoint_path=checkpoint_path,
+            model=model,
+            normalizer=normalizer,
+            config=config,
+        )
     _evaluate_split(
         model=model,
         physics_informer=physics_informer,

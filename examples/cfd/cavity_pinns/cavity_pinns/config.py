@@ -62,6 +62,10 @@ class CavityPINNConfig:
     visualization_dir: str = str(
         Path(__file__).resolve().parent.parent / "outputs" / "figures"
     )
+    model_checkpoint_path: str = str(
+        Path(__file__).resolve().parent.parent / "outputs" / "checkpoints" / "cavity_pinn.pt"
+    )
+    use_saved_model_for_unseen: bool = False
 
 
 def load_config(config_path: Path | None) -> CavityPINNConfig:

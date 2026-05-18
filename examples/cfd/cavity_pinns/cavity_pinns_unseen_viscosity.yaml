@@ -38,3 +38,5 @@ log_every: 200
 save_visualizations: true
 visualization_max_cases: 3
 visualization_dir: examples/cfd/cavity_pinns/outputs/figures
+model_checkpoint_path: examples/cfd/cavity_pinns/outputs/checkpoints/cavity_pinn.pt
+use_saved_model_for_unseen: true

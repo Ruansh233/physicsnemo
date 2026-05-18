@@ -35,7 +35,7 @@ fails fast if OpenFOAM is not active.
 ## Run Standard Train/Validate/Test Workflow
 
 ```bash
-uv run python examples/cfd/cavity_pinns/train.py --config examples/cfd/cavity_pinns/cavity_pinns.yaml
+uv run python examples/cfd/cavity_pinns/cavity_pinns.py --config examples/cfd/cavity_pinns/cavity_pinns.yaml
 ```
 
 This run:
@@ -48,11 +48,14 @@ This run:
 ## Run Unseen-Viscosity Validation Workflow
 
 ```bash
-uv run python examples/cfd/cavity_pinns/validate_unseen_viscosity.py --config examples/cfd/cavity_pinns/cavity_pinns_unseen_viscosity.yaml
+uv run python examples/cfd/cavity_pinns/cavity_pinns_unseen_viscosity.py --config examples/cfd/cavity_pinns/cavity_pinns_unseen_viscosity.yaml
 ```
 
 This run trains on sampled in-range training viscosities and evaluates on
 disjoint sampled unseen viscosities.
+
+By default this workflow reuses a saved checkpoint (`model_checkpoint_path`)
+instead of retraining, controlled by `use_saved_model_for_unseen`.
 
 ## Tune Architecture For Better Accuracy
 
@@ -87,6 +90,7 @@ Main configuration fields:
   `boundary_loss_ramp_steps`, `physics_loss_weight`, `physics_loss_ramp_steps`,
   `boundary_points_per_wall`
 - visualization: `save_visualizations`, `visualization_max_cases`, `visualization_dir`
+- checkpointing: `model_checkpoint_path`, `use_saved_model_for_unseen`
 
 The default configuration uses a `tanh` MLP and ramps the boundary and physics
 losses in after the supervised signal has started fitting. This avoids forcing
