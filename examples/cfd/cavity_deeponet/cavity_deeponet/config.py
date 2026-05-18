@@ -35,6 +35,11 @@ class CavityDeepONetConfig:
     nu_max: float = 1.0e-2
     reynolds_min: float = 10.0
     reynolds_max: float = 100.0
+    viscosity_seed: int = 7
+    train_case_count: int = 40
+    validate_case_count: int = 5
+    test_case_count: int = 5
+    manifest_filename: str = "viscosity_split_manifest.json"
     latent_dim: int = 128
     branch_layers: int = 4
     trunk_layers: int = 4
@@ -43,6 +48,8 @@ class CavityDeepONetConfig:
     learning_rate: float = 3.0e-3
     weight_decay: float = 1.0e-6
     train_steps: int = 1000
+    log_steps: int = 50
+    enable_realtime_loss_plot: bool = False
     lbfgs_steps: int = 200
     lbfgs_lr: float = 0.3
     normalize_inputs: bool = True
@@ -54,6 +61,11 @@ class CavityDeepONetConfig:
         Path(__file__).resolve().parent.parent / "outputs" / "figures"
     )
     visualization_max_cases: int = 3
+    model_checkpoint_path: str = str(
+        Path(__file__).resolve().parent.parent / "outputs" / "deeponet_model.pt"
+    )
+    save_trained_model: bool = True
+    use_saved_model_for_unseen: bool = False
 
 
 def load_config(config_path: Path | None) -> CavityDeepONetConfig:
