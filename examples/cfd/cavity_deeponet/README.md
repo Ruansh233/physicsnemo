@@ -2,7 +2,7 @@
 
 This example trains and evaluates a DeepONet surrogate for the OpenFOAM cavity case in:
 
-- `examples/cfd/cavity_of/cavity`
+- `examples/cfd/cavity_deeponet/cavity`
 
 The model predicts four channels per query point:
 
@@ -17,13 +17,13 @@ with output order `(u, v, w, p)`.
 2. Install example-local dependency:
 
 ```bash
-uv pip install -r examples/cfd/cavity_of/requirements.txt
+uv pip install -r examples/cfd/cavity_deeponet/requirements.txt
 ```
 
-3. Activate OpenFOAM in your shell before running (this workflow expects `of2312`):
+3. Activate OpenFOAM in your shell before running the example. For example, if you have OpenFOAM installed at `/path/to/OpenFOAM`, run:
 
 ```bash
-of2312
+source /path/to/OpenFOAM/etc/bashrc
 ```
 
 The runner checks `blockMesh`, `icoFoam`, and `postProcess` availability and fails fast if OpenFOAM is not active.
@@ -33,16 +33,16 @@ The runner checks `blockMesh`, `icoFoam`, and `postProcess` availability and fai
 Use the thin wrapper script:
 
 ```bash
-uv run python examples/cfd/cavity_of/deeponet_cavity.py --config examples/cfd/cavity_of/deeponet_cavity.yaml
+uv run python examples/cfd/cavity_deeponet/deeponet_cavity.py --config examples/cfd/cavity_deeponet/deeponet_cavity.yaml
 ```
 
 You can also run without `--config` to use built-in defaults from `CavityDeepONetConfig`.
 
 ## How `deeponet_cavity.yaml` Is Used
 
-`examples/cfd/cavity_of/deeponet_cavity.yaml` is loaded by `load_config()` in:
+`examples/cfd/cavity_deeponet/deeponet_cavity.yaml` is loaded by `load_config()` in:
 
-- `examples/cfd/cavity_of/cavity_deeponet/config.py`
+- `examples/cfd/cavity_deeponet/cavity_deeponet/config.py`
 
 Behavior:
 
@@ -53,7 +53,8 @@ Behavior:
 
 The merged config drives:
 
-- OpenFOAM data generation (`case_path`, `run_root`, `run_openfoam`, `viscosity_values`)
+- split generation (`viscosity_seed`, `train_case_count`, `validate_case_count`, `test_case_count`, `manifest_filename`)
+- OpenFOAM data generation (`case_path`, `run_root`, `run_openfoam`)
 - physical validity bounds (`nu_min`, `nu_max`, `reynolds_min`, `reynolds_max`)
 - DeepONet architecture (`latent_dim`, `branch_layers`, `trunk_layers`, `layer_size`, `activation_fn`)
 - optimization (`learning_rate`, `weight_decay`, `train_steps`, `lbfgs_steps`, `lbfgs_lr`)
@@ -61,8 +62,8 @@ The merged config drives:
 
 ## Notes On Generated Run Directories
 
-Generated foamlib run folders (for example `.foamlib_runs` and `.foamlib_runs_eval`) are local execution artifacts and are ignored by `.gitignore`:
+Generated foamlib run folders (for example `.foamlib_runs`, `.foamlib_runs_train`, and `.foamlib_runs_unseen_test`) are local execution artifacts and are ignored by `.gitignore`:
 
-- `examples/cfd/cavity_of/.foamlib_runs*/`
+- `examples/cfd/cavity_deeponet/.foamlib_runs*/`
 
 If present locally and not needed, you can remove them safely.

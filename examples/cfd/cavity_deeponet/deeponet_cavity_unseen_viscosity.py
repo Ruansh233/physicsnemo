@@ -11,29 +11,35 @@ from pathlib import Path
 import torch
 from omegaconf import OmegaConf
 
-from examples.cfd.cavity_of.cavity_deeponet.config import CavityDeepONetConfig
-from examples.cfd.cavity_of.cavity_deeponet.modeling import (
+from examples.cfd.cavity_deeponet.cavity_deeponet.config import CavityDeepONetConfig
+from examples.cfd.cavity_deeponet.cavity_deeponet.modeling import (
     TensorNormalizer,
     build_deeponet,
     compute_relative_l2,
     train_deeponet,
 )
-from examples.cfd.cavity_of.cavity_deeponet.openfoam_data import generate_dataset
-from examples.cfd.cavity_of.cavity_deeponet.visualization import visualize_predictions
+from examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data import generate_dataset
+from examples.cfd.cavity_deeponet.cavity_deeponet.visualization import (
+    visualize_predictions,
+)
 
 
 def _load_workflow_config(
     config_path: Path | None,
 ) -> tuple[CavityDeepONetConfig, tuple[float, ...], tuple[float, ...]]:
     base_cfg = OmegaConf.structured(CavityDeepONetConfig())
-    user_cfg = OmegaConf.load(config_path) if config_path is not None else OmegaConf.create({})
+    user_cfg = (
+        OmegaConf.load(config_path) if config_path is not None else OmegaConf.create({})
+    )
 
     train_values = tuple(float(v) for v in user_cfg.pop("train_viscosity_values", []))
     test_values = tuple(float(v) for v in user_cfg.pop("test_viscosity_values", []))
     if not train_values:
         train_values = tuple(float(v) for v in base_cfg.viscosity_values)
     if not test_values:
-        raise ValueError("Please provide non-empty `test_viscosity_values` in the workflow config.")
+        raise ValueError(
+            "Please provide non-empty `test_viscosity_values` in the workflow config."
+        )
     overlap = set(train_values).intersection(test_values)
     if overlap:
         raise ValueError(
@@ -46,22 +52,40 @@ def _load_workflow_config(
     return cfg, train_values, test_values
 
 
-def _fit_normalizers(cfg: CavityDeepONetConfig, branch: torch.Tensor, trunk: torch.Tensor, target: torch.Tensor):
+def _fit_normalizers(
+    cfg: CavityDeepONetConfig,
+    branch: torch.Tensor,
+    trunk: torch.Tensor,
+    target: torch.Tensor,
+):
     branch_normalizer = (
-        TensorNormalizer.fit(branch) if cfg.normalize_inputs else TensorNormalizer.identity(branch)
+        TensorNormalizer.fit(branch)
+        if cfg.normalize_inputs
+        else TensorNormalizer.identity(branch)
     )
     trunk_normalizer = (
-        TensorNormalizer.fit(trunk) if cfg.normalize_inputs else TensorNormalizer.identity(trunk)
+        TensorNormalizer.fit(trunk)
+        if cfg.normalize_inputs
+        else TensorNormalizer.identity(trunk)
     )
     target_normalizer = (
-        TensorNormalizer.fit(target) if cfg.normalize_targets else TensorNormalizer.identity(target)
+        TensorNormalizer.fit(target)
+        if cfg.normalize_targets
+        else TensorNormalizer.identity(target)
     )
     return branch_normalizer, trunk_normalizer, target_normalizer
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="DeepONet cavity unseen-viscosity workflow.")
-    parser.add_argument("--config", type=Path, default=None, help="Path to unseen-viscosity YAML config.")
+    parser = argparse.ArgumentParser(
+        description="DeepONet cavity unseen-viscosity workflow."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to unseen-viscosity YAML config.",
+    )
     args = parser.parse_args()
 
     cfg, train_viscosities, test_viscosities = _load_workflow_config(args.config)
@@ -74,7 +98,9 @@ def main() -> None:
     test_cfg = replace(
         cfg,
         viscosity_values=test_viscosities,
-        run_root=str(Path(cfg.run_root).parent / (Path(cfg.run_root).name + "_unseen_test")),
+        run_root=str(
+            Path(cfg.run_root).parent / (Path(cfg.run_root).name + "_unseen_test")
+        ),
     )
 
     model = build_deeponet(cfg).to(cfg.device)
@@ -88,7 +114,9 @@ def main() -> None:
     test_trunk = test_trunk.to(cfg.device)
     test_target = test_target.to(cfg.device)
 
-    branch_norm, trunk_norm, target_norm = _fit_normalizers(cfg, train_branch, train_trunk, train_target)
+    branch_norm, trunk_norm, target_norm = _fit_normalizers(
+        cfg, train_branch, train_trunk, train_target
+    )
 
     train_branch_model = branch_norm.transform(train_branch)
     train_trunk_model = trunk_norm.transform(train_trunk)
@@ -121,7 +149,9 @@ def main() -> None:
     print(f"Final normalized training loss: {final_loss:.6e}")
     print(f"Train physical aggregate rel-L2: {train_rel_l2:.6e}")
     print(f"Unseen-test physical aggregate rel-L2: {test_rel_l2:.6e}")
-    for channel_name, tr, te in zip(model.output_channel_names, train_channels, test_channels):
+    for channel_name, tr, te in zip(
+        model.output_channel_names, train_channels, test_channels
+    ):
         print(f"Channel {channel_name}: train={tr:.6e}, unseen_test={te:.6e}")
 
     if cfg.save_visualizations:

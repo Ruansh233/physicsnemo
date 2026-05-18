@@ -35,6 +35,11 @@ class CavityDeepONetConfig:
     nu_max: float = 1.0e-2
     reynolds_min: float = 10.0
     reynolds_max: float = 100.0
+    viscosity_seed: int = 7
+    train_case_count: int = 40
+    validate_case_count: int = 5
+    test_case_count: int = 5
+    manifest_filename: str = "viscosity_split_manifest.json"
     latent_dim: int = 128
     branch_layers: int = 4
     trunk_layers: int = 4

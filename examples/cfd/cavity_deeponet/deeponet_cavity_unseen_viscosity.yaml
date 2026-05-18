@@ -1,5 +1,5 @@
-case_path: examples/cfd/cavity_of/cavity
-run_root: examples/cfd/cavity_of/.foamlib_runs
+case_path: examples/cfd/cavity_deeponet/cavity
+run_root: examples/cfd/cavity_deeponet/.foamlib_runs
 run_openfoam: true
 clean_run_root: false
 
@@ -27,5 +27,5 @@ normalize_targets: true
 device: cpu
 dtype: float32
 save_visualizations: true
-visualization_dir: examples/cfd/cavity_of/outputs/figures
+visualization_dir: examples/cfd/cavity_deeponet/outputs/figures
 visualization_max_cases: 3

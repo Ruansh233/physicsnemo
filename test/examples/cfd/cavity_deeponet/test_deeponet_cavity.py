@@ -20,24 +20,28 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
-from examples.cfd.cavity_of.deeponet_cavity import (
+from examples.cfd.cavity_deeponet.cavity_deeponet.splits import build_split_manifest
+from examples.cfd.cavity_deeponet.deeponet_cavity import (
     CavityCaseMetaData,
     CavityDeepONetConfig,
     CavityPhysicalLimits,
+    CavitySampleTensors,
     TensorNormalizer,
     build_deeponet,
     build_sample_tensors,
-    compute_reynolds_number,
     compute_relative_l2,
+    compute_reynolds_number,
     ensure_openfoam_environment,
+    generate_split_datasets,
     run_case_for_viscosity,
     validate_viscosity_and_reynolds,
 )
 
 
-def test_cavity_deeponet_package_exports_match_legacy_module():
-    from examples.cfd.cavity_of.cavity_deeponet import (
+def test_cavity_deeponet_package_exports_match_wrapper_module():
+    from examples.cfd.cavity_deeponet.cavity_deeponet import (
         CavityDeepONetConfig as PackageConfig,
     )
 
@@ -162,10 +166,100 @@ def test_reynolds_and_viscosity_validation():
 
     assert compute_reynolds_number(1.0e-2, 1.0, 0.1) == pytest.approx(10.0)
     assert compute_reynolds_number(1.0e-3, 1.0, 0.1) == pytest.approx(100.0)
-    assert validate_viscosity_and_reynolds(5.0e-3, metadata, limits) == pytest.approx(20.0)
+    assert validate_viscosity_and_reynolds(5.0e-3, metadata, limits) == pytest.approx(
+        20.0
+    )
 
     with pytest.raises(ValueError, match="Viscosity"):
         validate_viscosity_and_reynolds(5.0e-4, metadata, limits)
+
+
+def test_split_manifest_samples_50_cases_reproducibly():
+    manifest_a = build_split_manifest(
+        seed=7,
+        train_count=40,
+        validate_count=5,
+        test_count=5,
+        nu_min=1.0e-3,
+        nu_max=1.0e-2,
+    )
+    manifest_b = build_split_manifest(
+        seed=7,
+        train_count=40,
+        validate_count=5,
+        test_count=5,
+        nu_min=1.0e-3,
+        nu_max=1.0e-2,
+    )
+
+    assert manifest_a == manifest_b
+    assert len(manifest_a["train"]) == 40
+    assert len(manifest_a["validate"]) == 5
+    assert len(manifest_a["test"]) == 5
+    all_values = manifest_a["train"] + manifest_a["validate"] + manifest_a["test"]
+    assert len(all_values) == 50
+    assert len(set(all_values)) == 50
+
+    train_min = min(manifest_a["train"])
+    train_max = max(manifest_a["train"])
+    for value in manifest_a["validate"] + manifest_a["test"]:
+        assert train_min < value < train_max
+
+
+def test_generate_split_datasets_writes_manifest_and_uses_all_splits(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def _fake_run_case_for_viscosity(nu, config, *, sample_index):
+        calls.append((nu, sample_index, config.run_root))
+        value = float(sample_index)
+        return CavitySampleTensors(
+            branch_input=torch.tensor([[nu]], dtype=torch.float32),
+            trunk_input=torch.tensor(
+                [[value, value + 1.0, value + 2.0]], dtype=torch.float32
+            ),
+            target=torch.tensor(
+                [[value, value + 0.1, value + 0.2, value + 0.3]], dtype=torch.float32
+            ),
+            reynolds_number=1.0,
+        )
+
+    monkeypatch.setattr(
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.run_case_for_viscosity",
+        _fake_run_case_for_viscosity,
+    )
+
+    cfg = CavityDeepONetConfig(
+        run_root=str(tmp_path / "runs"),
+        train_case_count=40,
+        validate_case_count=5,
+        test_case_count=5,
+        manifest_filename="split.json",
+    )
+    split_tensors, manifest = generate_split_datasets(cfg)
+
+    assert len(calls) == 50
+    assert [sample_index for _, sample_index, _ in calls] == list(range(50))
+    assert len(manifest["train"]) == 40
+    assert len(manifest["validate"]) == 5
+    assert len(manifest["test"]) == 5
+    assert (tmp_path / "runs" / "split.json").is_file()
+    assert split_tensors["train"][0].shape == (40, 1)
+    assert split_tensors["validate"][0].shape == (5, 1)
+    assert split_tensors["test"][0].shape == (5, 1)
+
+
+def test_split_manifest_raises_when_interpolation_cannot_be_satisfied():
+    with pytest.raises(ValueError, match="train_count >= 2"):
+        build_split_manifest(
+            seed=3,
+            train_count=1,
+            validate_count=1,
+            test_count=0,
+            nu_min=1.0e-3,
+            nu_max=1.0e-2,
+        )
 
 
 def test_build_deeponet_defaults():
@@ -231,7 +325,9 @@ def test_compute_relative_l2_uses_absolute_error_for_zero_channels():
 
     assert aggregate > 0.0
     assert channel_errors[0] == pytest.approx(0.0)
-    assert channel_errors[1] == pytest.approx(float(torch.linalg.vector_norm(prediction[:, 1])))
+    assert channel_errors[1] == pytest.approx(
+        float(torch.linalg.vector_norm(prediction[:, 1]))
+    )
 
 
 def test_openfoam_environment_check(monkeypatch):
@@ -241,7 +337,8 @@ def test_openfoam_environment_check(monkeypatch):
         return f"/usr/bin/{cmd}"
 
     monkeypatch.setattr(
-        "examples.cfd.cavity_of.cavity_deeponet.openfoam_data.shutil.which", _fake_which
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.shutil.which",
+        _fake_which,
     )
     with pytest.raises(RuntimeError, match="Missing required OpenFOAM commands"):
         ensure_openfoam_environment()
@@ -251,11 +348,11 @@ def test_run_case_for_viscosity_with_mocked_foamlib(monkeypatch, tmp_path):
     _FakeFoamCase.source_instances = []
     _FakeFoamCase.clone_instances = []
     monkeypatch.setattr(
-        "examples.cfd.cavity_of.cavity_deeponet.openfoam_data.get_foam_case_cls",
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.get_foam_case_cls",
         lambda: _FakeFoamCase,
     )
     monkeypatch.setattr(
-        "examples.cfd.cavity_of.cavity_deeponet.openfoam_data.ensure_openfoam_environment",
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.ensure_openfoam_environment",
         lambda: None,
     )
 

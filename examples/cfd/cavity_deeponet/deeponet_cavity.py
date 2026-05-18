@@ -6,12 +6,12 @@ r"""Backward-compatible entrypoint for the cavity DeepONet workflow."""
 
 from __future__ import annotations
 
-from examples.cfd.cavity_of.cavity_deeponet import (
+from examples.cfd.cavity_deeponet.cavity_deeponet import (
+    REQUIRED_OPENFOAM_COMMANDS,
     CavityCaseMetaData,
     CavityDeepONetConfig,
     CavityPhysicalLimits,
     CavitySampleTensors,
-    REQUIRED_OPENFOAM_COMMANDS,
     TensorNormalizer,
     build_deeponet,
     build_sample_tensors,
@@ -20,14 +20,19 @@ from examples.cfd.cavity_of.cavity_deeponet import (
     ensure_openfoam_environment,
     extract_case_metadata,
     generate_dataset,
-    get_foam_case_cls as _get_foam_case_cls,
-    load_config as _load_config,
+    generate_split_datasets,
     run_case_for_viscosity,
     train_deeponet,
     validate_viscosity_and_reynolds,
     visualize_predictions,
 )
-from examples.cfd.cavity_of.cavity_deeponet.pipeline import main
+from examples.cfd.cavity_deeponet.cavity_deeponet import (
+    get_foam_case_cls as _get_foam_case_cls,
+)
+from examples.cfd.cavity_deeponet.cavity_deeponet import (
+    load_config as _load_config,
+)
+from examples.cfd.cavity_deeponet.cavity_deeponet.pipeline import main
 
 __all__ = [
     "CavityCaseMetaData",
@@ -43,6 +48,7 @@ __all__ = [
     "ensure_openfoam_environment",
     "extract_case_metadata",
     "generate_dataset",
+    "generate_split_datasets",
     "run_case_for_viscosity",
     "train_deeponet",
     "validate_viscosity_and_reynolds",

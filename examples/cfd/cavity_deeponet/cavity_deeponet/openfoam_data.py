@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 
 from .config import CavityCaseMetaData, CavityDeepONetConfig, CavityPhysicalLimits
+from .splits import build_split_manifest, save_split_manifest
 
 REQUIRED_OPENFOAM_COMMANDS = ("blockMesh", "icoFoam", "postProcess")
 
@@ -32,23 +33,28 @@ def get_foam_case_cls() -> Any:
         from foamlib import FoamCase
     except ImportError as exc:
         raise ImportError(
-            "foamlib is required for examples/cfd/cavity_of. "
-            "Install with `pip install -r examples/cfd/cavity_of/requirements.txt`."
+            "foamlib is required for examples/cfd/cavity_deeponet. "
+            "Install with `pip install -r examples/cfd/cavity_deeponet/requirements.txt`."
         ) from exc
     return FoamCase
 
 
-def ensure_openfoam_environment(commands: Sequence[str] = REQUIRED_OPENFOAM_COMMANDS) -> None:
+def ensure_openfoam_environment(
+    commands: Sequence[str] = REQUIRED_OPENFOAM_COMMANDS,
+) -> None:
     missing = [cmd for cmd in commands if shutil.which(cmd) is None]
     if missing:
         missing_str = ", ".join(missing)
         raise RuntimeError(
             f"Missing required OpenFOAM commands: {missing_str}. "
-            "Activate OpenFOAM first (for this workspace, run `of2312`)."
+            "Activate OpenFOAM first, for example with "
+            "`source /home/shenhui_ruan/OpenFOAM/OpenFOAM-v2312/etc/bashrc`."
         )
 
 
-def compute_reynolds_number(nu: float, lid_velocity: float, length_scale: float) -> float:
+def compute_reynolds_number(
+    nu: float, lid_velocity: float, length_scale: float
+) -> float:
     if nu <= 0.0:
         raise ValueError(f"Expected nu > 0, but got {nu}")
     if lid_velocity <= 0.0:
@@ -136,7 +142,9 @@ def _as_scalar_field(value: Any, num_cells: int) -> np.ndarray:
     )
 
 
-def build_sample_tensors(case: Any, nu: float, dtype: torch.dtype = torch.float32) -> CavitySampleTensors:
+def build_sample_tensors(
+    case: Any, nu: float, dtype: torch.dtype = torch.float32
+) -> CavitySampleTensors:
     last_time = case[-1]
     query_time = float(last_time.time)
     if query_time <= 0.0:
@@ -167,7 +175,9 @@ def build_sample_tensors(case: Any, nu: float, dtype: torch.dtype = torch.float3
         (centers[:, 0], centers[:, 1], np.full((num_cells,), query_time, dtype=float))
     )
     branch_np = np.full((num_cells, 1), nu, dtype=float)
-    target_np = np.column_stack((velocity[:, 0], velocity[:, 1], velocity[:, 2], pressure))
+    target_np = np.column_stack(
+        (velocity[:, 0], velocity[:, 1], velocity[:, 2], pressure)
+    )
 
     return CavitySampleTensors(
         branch_input=torch.tensor(branch_np, dtype=dtype),
@@ -210,7 +220,9 @@ def run_case_for_viscosity(
         cloned_case.block_mesh()
         cloned_case.run("icoFoam")
 
-    sample = build_sample_tensors(cloned_case, nu=nu, dtype=getattr(torch, config.dtype))
+    sample = build_sample_tensors(
+        cloned_case, nu=nu, dtype=getattr(torch, config.dtype)
+    )
     sample.reynolds_number = reynolds
     return sample
 
@@ -235,3 +247,50 @@ def generate_dataset(config: CavityDeepONetConfig) -> tuple[Tensor, Tensor, Tens
         torch.cat(trunk_batches, dim=0),
         torch.cat(target_batches, dim=0),
     )
+
+
+def generate_split_datasets(
+    config: CavityDeepONetConfig,
+) -> tuple[dict[str, tuple[Tensor, Tensor, Tensor]], dict[str, object]]:
+    if config.clean_run_root:
+        run_root = Path(config.run_root)
+        if run_root.exists():
+            shutil.rmtree(run_root)
+
+    manifest = build_split_manifest(
+        seed=config.viscosity_seed,
+        train_count=config.train_case_count,
+        validate_count=config.validate_case_count,
+        test_count=config.test_case_count,
+        nu_min=config.nu_min,
+        nu_max=config.nu_max,
+    )
+    manifest_path = Path(config.run_root) / config.manifest_filename
+    save_split_manifest(manifest_path, manifest)
+    print(f"Saved viscosity split manifest to: {manifest_path}")
+
+    split_tensors: dict[str, tuple[Tensor, Tensor, Tensor]] = {}
+    sample_index = 0
+    for split_name in ("train", "validate", "test"):
+        branch_batches: list[Tensor] = []
+        trunk_batches: list[Tensor] = []
+        target_batches: list[Tensor] = []
+        for nu in manifest[split_name]:
+            sample = run_case_for_viscosity(
+                nu=float(nu),
+                config=config,
+                sample_index=sample_index,
+            )
+            sample_index += 1
+            branch_batches.append(sample.branch_input)
+            trunk_batches.append(sample.trunk_input)
+            target_batches.append(sample.target)
+        if not branch_batches:
+            raise ValueError(f"Split '{split_name}' is empty; increase case counts.")
+        split_tensors[split_name] = (
+            torch.cat(branch_batches, dim=0),
+            torch.cat(trunk_batches, dim=0),
+            torch.cat(target_batches, dim=0),
+        )
+
+    return split_tensors, manifest
