@@ -9,9 +9,6 @@ validate_case_count: 5
 test_case_count: 5
 manifest_filename: viscosity_split_manifest.json
 
-# Used by unseen-viscosity workflows; the main workflow now samples and splits
-# viscosities from counts above.
-viscosity_values: [1.0e-3, 5.0e-3, 1.0e-2]
 nu_min: 1.0e-3
 nu_max: 1.0e-2
 reynolds_min: 10.0
@@ -35,4 +32,3 @@ visualization_dir: examples/cfd/cavity_deeponet/outputs/figures
 visualization_max_cases: 3
 model_checkpoint_path: examples/cfd/cavity_deeponet/outputs/deeponet_model.pt
 save_trained_model: true
-use_saved_model_for_unseen: false
