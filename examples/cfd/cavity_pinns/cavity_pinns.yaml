@@ -1,0 +1,40 @@
+case_path: examples/cfd/cavity_deeponet/cavity
+run_root: examples/cfd/cavity_pinns/.foamlib_runs_pinn
+run_openfoam: true
+clean_run_root: false
+
+spatial_dim: 2
+coordinate_names: [x, y]
+velocity_names: [u, v]
+pressure_name: p
+
+device: cpu
+dtype: float32
+
+reynolds_min: 10.0
+reynolds_max: 100.0
+viscosity_seed: 7
+train_case_count: 40
+validate_case_count: 5
+test_case_count: 5
+unseen_case_count: 0
+manifest_filename: viscosity_split_manifest.json
+
+model_layers: 4
+model_layer_size: 128
+activation_fn: tanh
+
+train_steps: 5000
+learning_rate: 1.0e-3
+weight_decay: 1.0e-6
+supervised_loss_weight: 1.0
+boundary_loss_weight: 1.0
+boundary_loss_ramp_steps: 500
+physics_loss_weight: 1.0e-1
+physics_loss_ramp_steps: 1000
+boundary_points_per_wall: 64
+log_every: 200
+
+save_visualizations: true
+visualization_max_cases: 3
+visualization_dir: examples/cfd/cavity_pinns/outputs/figures
