@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import math
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -142,6 +142,28 @@ def _as_scalar_field(value: Any, num_cells: int) -> np.ndarray:
     )
 
 
+def _shared_poly_mesh_path(case: Any) -> Path:
+    return Path(case.path) / "constant" / "polyMesh"
+
+
+def _reuse_reference_poly_mesh(source_case: Any, cloned_case: Any) -> None:
+    source_poly_mesh = _shared_poly_mesh_path(source_case)
+    if not source_poly_mesh.is_dir():
+        raise FileNotFoundError(
+            "Expected reference mesh directory at "
+            f"{source_poly_mesh}, but it was not found."
+        )
+
+    cloned_poly_mesh = _shared_poly_mesh_path(cloned_case)
+    if cloned_poly_mesh.is_symlink() or cloned_poly_mesh.is_file():
+        cloned_poly_mesh.unlink()
+    elif cloned_poly_mesh.exists():
+        shutil.rmtree(cloned_poly_mesh)
+
+    cloned_poly_mesh.parent.mkdir(parents=True, exist_ok=True)
+    cloned_poly_mesh.symlink_to(source_poly_mesh, target_is_directory=True)
+
+
 def build_sample_tensors(
     case: Any, nu: float, dtype: torch.dtype = torch.float32
 ) -> CavitySampleTensors:
@@ -215,9 +237,10 @@ def run_case_for_viscosity(
     with cloned_case.transport_properties as transport_properties:
         transport_properties["nu"] = float(nu)
 
+    _reuse_reference_poly_mesh(source_case, cloned_case)
+
     if config.run_openfoam:
         ensure_openfoam_environment()
-        cloned_case.block_mesh()
         cloned_case.run("icoFoam")
 
     sample = build_sample_tensors(
@@ -272,13 +295,14 @@ def generate_split_datasets(
     split_tensors: dict[str, tuple[Tensor, Tensor, Tensor]] = {}
     sample_index = 0
     for split_name in ("train", "validate", "test"):
+        split_config = replace(config, run_root=str(Path(config.run_root) / split_name))
         branch_batches: list[Tensor] = []
         trunk_batches: list[Tensor] = []
         target_batches: list[Tensor] = []
         for nu in manifest[split_name]:
             sample = run_case_for_viscosity(
                 nu=float(nu),
-                config=config,
+                config=split_config,
                 sample_index=sample_index,
             )
             sample_index += 1

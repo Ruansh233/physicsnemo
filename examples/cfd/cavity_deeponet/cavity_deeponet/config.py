@@ -48,6 +48,8 @@ class CavityDeepONetConfig:
     learning_rate: float = 3.0e-3
     weight_decay: float = 1.0e-6
     train_steps: int = 1000
+    log_steps: int = 50
+    enable_realtime_loss_plot: bool = False
     lbfgs_steps: int = 200
     lbfgs_lr: float = 0.3
     normalize_inputs: bool = True

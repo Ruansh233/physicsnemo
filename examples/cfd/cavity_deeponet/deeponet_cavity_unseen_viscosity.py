@@ -150,6 +150,8 @@ def main() -> None:
             lr=cfg.learning_rate,
             steps=cfg.train_steps,
             weight_decay=cfg.weight_decay,
+            log_steps=cfg.log_steps,
+            enable_realtime_loss_plot=cfg.enable_realtime_loss_plot,
             lbfgs_steps=cfg.lbfgs_steps,
             lbfgs_lr=cfg.lbfgs_lr,
         )

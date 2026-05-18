@@ -21,6 +21,8 @@ activation_fn: gelu
 learning_rate: 3.0e-3
 weight_decay: 1.0e-6
 train_steps: 1000
+log_steps: 50
+enable_realtime_loss_plot: false
 lbfgs_steps: 200
 lbfgs_lr: 0.3
 normalize_inputs: true

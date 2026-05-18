@@ -26,6 +26,7 @@ from examples.cfd.cavity_deeponet.cavity_deeponet.splits import build_split_mani
 from examples.cfd.cavity_deeponet.cavity_deeponet.modeling import (
     load_checkpoint,
     save_checkpoint,
+    train_deeponet,
 )
 from examples.cfd.cavity_deeponet.deeponet_cavity import (
     CavityCaseMetaData,
@@ -245,6 +246,11 @@ def test_generate_split_datasets_writes_manifest_and_uses_all_splits(
 
     assert len(calls) == 50
     assert [sample_index for _, sample_index, _ in calls] == list(range(50))
+    assert {Path(run_root).name for _, _, run_root in calls} == {
+        "train",
+        "validate",
+        "test",
+    }
     assert len(manifest["train"]) == 40
     assert len(manifest["validate"]) == 5
     assert len(manifest["test"]) == 5
@@ -370,6 +376,85 @@ def test_compute_relative_l2_uses_absolute_error_for_zero_channels():
     )
 
 
+def test_train_deeponet_prints_step_loss_log(capsys):
+    model = build_deeponet(CavityDeepONetConfig(latent_dim=8, layer_size=16))
+    branch = torch.tensor([[0.1], [0.2], [0.3]], dtype=torch.float32)
+    trunk = torch.tensor(
+        [[0.0, 0.1, 0.2], [0.1, 0.2, 0.3], [0.2, 0.3, 0.4]], dtype=torch.float32
+    )
+    target = torch.tensor(
+        [[1.0, 0.0, 0.0, 0.2], [0.9, 0.1, 0.0, 0.3], [0.8, 0.2, 0.0, 0.4]],
+        dtype=torch.float32,
+    )
+
+    train_deeponet(
+        model,
+        branch_input=branch,
+        trunk_input=trunk,
+        target=target,
+        lr=1.0e-3,
+        steps=1,
+        log_steps=1,
+    )
+    out = capsys.readouterr().out
+    assert "step=00001 branch_loss=" in out
+    assert "trunk_loss=" in out
+
+
+def test_train_deeponet_realtime_plot_is_configurable(monkeypatch):
+    calls = {"build": 0, "update": 0, "close": 0}
+
+    def _fake_builder():
+        calls["build"] += 1
+
+        def _update(_step, _loss):
+            calls["update"] += 1
+
+        def _close():
+            calls["close"] += 1
+
+        return _update, _close
+
+    monkeypatch.setattr(
+        "examples.cfd.cavity_deeponet.cavity_deeponet.modeling._build_realtime_loss_plotter",
+        _fake_builder,
+    )
+
+    model = build_deeponet(CavityDeepONetConfig(latent_dim=8, layer_size=16))
+    branch = torch.tensor([[0.1], [0.2], [0.3]], dtype=torch.float32)
+    trunk = torch.tensor(
+        [[0.0, 0.1, 0.2], [0.1, 0.2, 0.3], [0.2, 0.3, 0.4]], dtype=torch.float32
+    )
+    target = torch.tensor(
+        [[1.0, 0.0, 0.0, 0.2], [0.9, 0.1, 0.0, 0.3], [0.8, 0.2, 0.0, 0.4]],
+        dtype=torch.float32,
+    )
+
+    train_deeponet(
+        model,
+        branch_input=branch,
+        trunk_input=trunk,
+        target=target,
+        lr=1.0e-3,
+        steps=2,
+        enable_realtime_loss_plot=False,
+    )
+    assert calls == {"build": 0, "update": 0, "close": 0}
+
+    train_deeponet(
+        model,
+        branch_input=branch,
+        trunk_input=trunk,
+        target=target,
+        lr=1.0e-3,
+        steps=2,
+        enable_realtime_loss_plot=True,
+    )
+    assert calls["build"] == 1
+    assert calls["update"] == 2
+    assert calls["close"] == 1
+
+
 def test_openfoam_environment_check(monkeypatch):
     def _fake_which(cmd):
         if cmd == "postProcess":
@@ -387,6 +472,7 @@ def test_openfoam_environment_check(monkeypatch):
 def test_run_case_for_viscosity_with_mocked_foamlib(monkeypatch, tmp_path):
     _FakeFoamCase.source_instances = []
     _FakeFoamCase.clone_instances = []
+    mesh_reuse_calls = []
     monkeypatch.setattr(
         "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.get_foam_case_cls",
         lambda: _FakeFoamCase,
@@ -394,6 +480,12 @@ def test_run_case_for_viscosity_with_mocked_foamlib(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.ensure_openfoam_environment",
         lambda: None,
+    )
+    monkeypatch.setattr(
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data._reuse_reference_poly_mesh",
+        lambda source_case, cloned_case: mesh_reuse_calls.append(
+            (source_case.path, cloned_case.path)
+        ),
     )
 
     cfg = CavityDeepONetConfig(
@@ -410,5 +502,55 @@ def test_run_case_for_viscosity_with_mocked_foamlib(monkeypatch, tmp_path):
     cloned_case = _FakeFoamCase.clone_instances[0]
     assert source_case.clone_paths == [tmp_path / "runs" / "nu_000_0.001"]
     assert cloned_case.transport_properties["nu"] == pytest.approx(1.0e-3)
-    assert cloned_case.block_mesh_called
+    assert mesh_reuse_calls == [
+        (tmp_path / "cavity", tmp_path / "runs" / "nu_000_0.001")
+    ]
+    assert not cloned_case.block_mesh_called
     assert cloned_case.run_calls == ["icoFoam"]
+
+
+def test_run_case_for_viscosity_reuses_reference_poly_mesh(monkeypatch, tmp_path):
+    class _FilesystemFoamCase(_FakeFoamCase):
+        def __init__(self, path: Path):
+            super().__init__(path)
+            poly_mesh_dir = self.path / "constant" / "polyMesh"
+            poly_mesh_dir.mkdir(parents=True, exist_ok=True)
+            (poly_mesh_dir / "marker.txt").write_text("mesh", encoding="utf-8")
+
+        def clone(self, dst):
+            self.clone_paths.append(Path(dst))
+            clone = _FilesystemFoamCase(dst)
+            clone.source_instances.remove(clone)
+            clone.clone_paths = []
+            self.clone_instances.append(clone)
+            return clone
+
+    _FilesystemFoamCase.source_instances = []
+    _FilesystemFoamCase.clone_instances = []
+    monkeypatch.setattr(
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.get_foam_case_cls",
+        lambda: _FilesystemFoamCase,
+    )
+    monkeypatch.setattr(
+        "examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data.ensure_openfoam_environment",
+        lambda: None,
+    )
+
+    cfg = CavityDeepONetConfig(
+        case_path=str(tmp_path / "cavity"),
+        run_root=str(tmp_path / "runs"),
+        run_openfoam=True,
+        viscosity_values=(1.0e-3,),
+    )
+    sample = run_case_for_viscosity(nu=1.0e-3, config=cfg, sample_index=0)
+
+    source_case = _FilesystemFoamCase.source_instances[0]
+    cloned_case = _FilesystemFoamCase.clone_instances[0]
+
+    assert sample.reynolds_number == pytest.approx(100.0)
+    assert not cloned_case.block_mesh_called
+    assert cloned_case.run_calls == ["icoFoam"]
+    poly_mesh_path = cloned_case.path / "constant" / "polyMesh"
+    assert poly_mesh_path.is_symlink()
+    assert poly_mesh_path.resolve() == (source_case.path / "constant" / "polyMesh").resolve()
+    assert (poly_mesh_path / "marker.txt").read_text(encoding="utf-8") == "mesh"

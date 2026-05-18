@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import torch
 from torch import Tensor
@@ -13,6 +14,44 @@ from torch import Tensor
 from physicsnemo.experimental.models.deeponet import DeepONet
 
 from .config import CavityDeepONetConfig
+
+
+def _build_realtime_loss_plotter() -> tuple[Callable[[int, float], None], Callable[[], None]]:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError(
+            "matplotlib is required for real-time loss plotting. "
+            "Install with `pip install matplotlib` or add it to your example environment."
+        ) from exc
+
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(8, 4))
+    steps: list[int] = []
+    losses: list[float] = []
+    (line,) = ax.plot([], [], label="training_loss")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Loss")
+    ax.set_title("DeepONet Training Loss")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    def _update(step: int, loss: float) -> None:
+        steps.append(step)
+        losses.append(loss)
+        line.set_data(steps, losses)
+        ax.relim()
+        ax.autoscale_view()
+        fig.canvas.draw_idle()
+        fig.canvas.flush_events()
+        plt.pause(0.001)
+
+    def _close() -> None:
+        plt.ioff()
+        plt.close(fig)
+
+    return _update, _close
 
 
 @dataclass(frozen=True)
@@ -80,6 +119,8 @@ def train_deeponet(
     lr: float,
     steps: int,
     weight_decay: float = 0.0,
+    log_steps: int = 0,
+    enable_realtime_loss_plot: bool = False,
     lbfgs_steps: int = 0,
     lbfgs_lr: float = 1.0,
 ) -> float:
@@ -88,38 +129,57 @@ def train_deeponet(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = torch.nn.MSELoss()
+    plot_update: Callable[[int, float], None] | None = None
+    plot_close: Callable[[], None] | None = None
+    if enable_realtime_loss_plot:
+        plot_update, plot_close = _build_realtime_loss_plotter()
 
     model.train()
     final_loss = float("nan")
-    for _ in range(steps):
-        optimizer.zero_grad(set_to_none=True)
-        pred = model(branch_input, trunk_input)
-        loss = criterion(pred, target)
-        loss.backward()
-        optimizer.step()
-        final_loss = float(loss.detach().cpu().item())
-
-    if lbfgs_steps > 0:
-        lbfgs_optimizer = torch.optim.LBFGS(
-            model.parameters(),
-            lr=lbfgs_lr,
-            max_iter=lbfgs_steps,
-            history_size=50,
-            line_search_fn="strong_wolfe",
-        )
-
-        def closure() -> Tensor:
-            lbfgs_optimizer.zero_grad(set_to_none=True)
+    try:
+        for step_idx in range(steps):
+            optimizer.zero_grad(set_to_none=True)
             pred = model(branch_input, trunk_input)
             loss = criterion(pred, target)
             loss.backward()
-            return loss
+            optimizer.step()
+            final_loss = float(loss.detach().cpu().item())
+            if plot_update is not None:
+                plot_update(step_idx + 1, final_loss)
+            if log_steps > 0 and ((step_idx + 1) % log_steps == 0):
+                print(
+                    f"step={step_idx + 1:05d} "
+                    f"branch_loss={final_loss:.6e} "
+                    f"trunk_loss={final_loss:.6e}"
+                )
 
-        lbfgs_optimizer.step(closure)
-        with torch.no_grad():
-            final_loss = float(
-                criterion(model(branch_input, trunk_input), target).detach().cpu().item()
+        if lbfgs_steps > 0:
+            lbfgs_optimizer = torch.optim.LBFGS(
+                model.parameters(),
+                lr=lbfgs_lr,
+                max_iter=lbfgs_steps,
+                history_size=50,
+                line_search_fn="strong_wolfe",
             )
+
+            def closure() -> Tensor:
+                lbfgs_optimizer.zero_grad(set_to_none=True)
+                pred = model(branch_input, trunk_input)
+                loss = criterion(pred, target)
+                loss.backward()
+                return loss
+
+            lbfgs_optimizer.step(closure)
+            with torch.no_grad():
+                final_loss = float(
+                    criterion(model(branch_input, trunk_input), target)
+                    .detach()
+                    .cpu()
+                    .item()
+                )
+    finally:
+        if plot_close is not None:
+            plot_close()
     return final_loss
 
 
