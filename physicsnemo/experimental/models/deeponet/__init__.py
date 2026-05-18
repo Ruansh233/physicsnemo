@@ -17,5 +17,11 @@
 r"""DeepONet model for operator learning in experimental namespace."""
 
 from .deeponet import DeepONet, DeepONetMetaData
+from .latent_deeponet import LatentDeepONet, LatentDeepONetMetaData
 
-__all__ = ["DeepONet", "DeepONetMetaData"]
+__all__ = [
+    "DeepONet",
+    "DeepONetMetaData",
+    "LatentDeepONet",
+    "LatentDeepONetMetaData",
+]
