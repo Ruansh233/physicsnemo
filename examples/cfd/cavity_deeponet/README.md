@@ -59,6 +59,14 @@ The merged config drives:
 - DeepONet architecture (`latent_dim`, `branch_layers`, `trunk_layers`, `layer_size`, `activation_fn`)
 - optimization (`learning_rate`, `weight_decay`, `train_steps`, `lbfgs_steps`, `lbfgs_lr`)
 - normalization and output settings (`normalize_inputs`, `normalize_targets`, `save_visualizations`, `visualization_dir`, `visualization_max_cases`)
+- model persistence and reuse (`model_checkpoint_path`, `save_trained_model`, `use_saved_model_for_unseen`)
+
+## Model Persistence And Unseen Test
+
+- Main workflow (`deeponet_cavity.py`) trains on train/validate/test splits and saves a checkpoint to `model_checkpoint_path` when `save_trained_model: true`.
+- Unseen workflow (`deeponet_cavity_unseen_viscosity.py`) supports two modes:
+  - `use_saved_model_for_unseen: true`: load saved model + normalizers from `model_checkpoint_path` and evaluate only unseen-test viscosities.
+  - `use_saved_model_for_unseen: false`: train on `train_viscosity_values`, optionally save checkpoint, then evaluate `test_viscosity_values`.
 
 ## Notes On Generated Run Directories
 

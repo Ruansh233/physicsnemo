@@ -186,6 +186,7 @@ sbatch_logs/
 model.onnx.data
 /deeponet/
 examples/cfd/cavity_deeponet/.foamlib_runs*/
+examples/cfd/cavity_deeponet/outputs/
 examples/cfd/cavity_deeponet/data/*.pt
 examples/cfd/cavity_deeponet/data/*metrics*.json
 examples/cfd/darcy_physics_informed/datasets/

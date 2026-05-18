@@ -16,6 +16,8 @@ from examples.cfd.cavity_deeponet.cavity_deeponet.modeling import (
     TensorNormalizer,
     build_deeponet,
     compute_relative_l2,
+    load_checkpoint,
+    save_checkpoint,
     train_deeponet,
 )
 from examples.cfd.cavity_deeponet.cavity_deeponet.openfoam_data import generate_dataset
@@ -89,12 +91,8 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg, train_viscosities, test_viscosities = _load_workflow_config(args.config)
+    checkpoint_path = Path(cfg.model_checkpoint_path)
 
-    train_cfg = replace(
-        cfg,
-        viscosity_values=train_viscosities,
-        run_root=str(Path(cfg.run_root).parent / (Path(cfg.run_root).name + "_train")),
-    )
     test_cfg = replace(
         cfg,
         viscosity_values=test_viscosities,
@@ -104,55 +102,97 @@ def main() -> None:
     )
 
     model = build_deeponet(cfg).to(cfg.device)
-    train_branch, train_trunk, train_target = generate_dataset(train_cfg)
     test_branch, test_trunk, test_target = generate_dataset(test_cfg)
 
-    train_branch = train_branch.to(cfg.device)
-    train_trunk = train_trunk.to(cfg.device)
-    train_target = train_target.to(cfg.device)
     test_branch = test_branch.to(cfg.device)
     test_trunk = test_trunk.to(cfg.device)
     test_target = test_target.to(cfg.device)
 
-    branch_norm, trunk_norm, target_norm = _fit_normalizers(
-        cfg, train_branch, train_trunk, train_target
-    )
+    train_rel_l2 = float("nan")
+    train_channels = tuple(float("nan") for _ in model.output_channel_names)
+    final_loss = float("nan")
+    loaded_from_checkpoint = False
 
-    train_branch_model = branch_norm.transform(train_branch)
-    train_trunk_model = trunk_norm.transform(train_trunk)
-    train_target_model = target_norm.transform(train_target)
+    if cfg.use_saved_model_for_unseen:
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(
+                f"`use_saved_model_for_unseen` is true but checkpoint was not found: "
+                f"{checkpoint_path}"
+            )
+        branch_norm, trunk_norm, target_norm = load_checkpoint(
+            checkpoint_path,
+            model,
+            device=cfg.device,
+            dtype=test_branch.dtype,
+        )
+        loaded_from_checkpoint = True
+    else:
+        train_cfg = replace(
+            cfg,
+            viscosity_values=train_viscosities,
+            run_root=str(Path(cfg.run_root).parent / (Path(cfg.run_root).name + "_train")),
+        )
+        train_branch, train_trunk, train_target = generate_dataset(train_cfg)
+        train_branch = train_branch.to(cfg.device)
+        train_trunk = train_trunk.to(cfg.device)
+        train_target = train_target.to(cfg.device)
+        branch_norm, trunk_norm, target_norm = _fit_normalizers(
+            cfg, train_branch, train_trunk, train_target
+        )
+        train_branch_model = branch_norm.transform(train_branch)
+        train_trunk_model = trunk_norm.transform(train_trunk)
+        train_target_model = target_norm.transform(train_target)
+        final_loss = train_deeponet(
+            model,
+            branch_input=train_branch_model,
+            trunk_input=train_trunk_model,
+            target=train_target_model,
+            lr=cfg.learning_rate,
+            steps=cfg.train_steps,
+            weight_decay=cfg.weight_decay,
+            lbfgs_steps=cfg.lbfgs_steps,
+            lbfgs_lr=cfg.lbfgs_lr,
+        )
+        with torch.no_grad():
+            train_pred = target_norm.inverse(model(train_branch_model, train_trunk_model))
+        train_rel_l2, train_channels = compute_relative_l2(train_pred, train_target)
+        if cfg.save_trained_model:
+            save_checkpoint(
+                checkpoint_path,
+                model,
+                branch_normalizer=branch_norm,
+                trunk_normalizer=trunk_norm,
+                target_normalizer=target_norm,
+            )
+            print(f"Saved unseen-workflow checkpoint to: {checkpoint_path}")
+
     test_branch_model = branch_norm.transform(test_branch)
     test_trunk_model = trunk_norm.transform(test_trunk)
 
-    final_loss = train_deeponet(
-        model,
-        branch_input=train_branch_model,
-        trunk_input=train_trunk_model,
-        target=train_target_model,
-        lr=cfg.learning_rate,
-        steps=cfg.train_steps,
-        weight_decay=cfg.weight_decay,
-        lbfgs_steps=cfg.lbfgs_steps,
-        lbfgs_lr=cfg.lbfgs_lr,
-    )
-
     model.eval()
     with torch.no_grad():
-        train_pred = target_norm.inverse(model(train_branch_model, train_trunk_model))
         test_pred = target_norm.inverse(model(test_branch_model, test_trunk_model))
 
-    train_rel_l2, train_channels = compute_relative_l2(train_pred, train_target)
     test_rel_l2, test_channels = compute_relative_l2(test_pred, test_target)
 
+    print(f"Using saved model for unseen test: {loaded_from_checkpoint}")
+    print(f"Model checkpoint path: {checkpoint_path}")
     print(f"Train viscosities: {train_viscosities}")
     print(f"Unseen test viscosities: {test_viscosities}")
-    print(f"Final normalized training loss: {final_loss:.6e}")
-    print(f"Train physical aggregate rel-L2: {train_rel_l2:.6e}")
+    if loaded_from_checkpoint:
+        print("Skipped training; metrics below only include unseen test.")
+    else:
+        print(f"Final normalized training loss: {final_loss:.6e}")
+        print(f"Train physical aggregate rel-L2: {train_rel_l2:.6e}")
     print(f"Unseen-test physical aggregate rel-L2: {test_rel_l2:.6e}")
-    for channel_name, tr, te in zip(
-        model.output_channel_names, train_channels, test_channels
-    ):
-        print(f"Channel {channel_name}: train={tr:.6e}, unseen_test={te:.6e}")
+    if loaded_from_checkpoint:
+        for channel_name, te in zip(model.output_channel_names, test_channels):
+            print(f"Channel {channel_name}: unseen_test={te:.6e}")
+    else:
+        for channel_name, tr, te in zip(
+            model.output_channel_names, train_channels, test_channels
+        ):
+            print(f"Channel {channel_name}: train={tr:.6e}, unseen_test={te:.6e}")
 
     if cfg.save_visualizations:
         vis_dir = Path(cfg.visualization_dir) / "unseen_viscosity"

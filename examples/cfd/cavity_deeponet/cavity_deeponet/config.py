@@ -59,6 +59,11 @@ class CavityDeepONetConfig:
         Path(__file__).resolve().parent.parent / "outputs" / "figures"
     )
     visualization_max_cases: int = 3
+    model_checkpoint_path: str = str(
+        Path(__file__).resolve().parent.parent / "outputs" / "deeponet_model.pt"
+    )
+    save_trained_model: bool = True
+    use_saved_model_for_unseen: bool = False
 
 
 def load_config(config_path: Path | None) -> CavityDeepONetConfig:

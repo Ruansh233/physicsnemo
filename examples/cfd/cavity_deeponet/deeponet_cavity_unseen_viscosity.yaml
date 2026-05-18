@@ -29,3 +29,6 @@ dtype: float32
 save_visualizations: true
 visualization_dir: examples/cfd/cavity_deeponet/outputs/figures
 visualization_max_cases: 3
+model_checkpoint_path: examples/cfd/cavity_deeponet/outputs/deeponet_model.pt
+save_trained_model: true
+use_saved_model_for_unseen: true

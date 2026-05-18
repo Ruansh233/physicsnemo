@@ -14,6 +14,7 @@ from .modeling import (
     TensorNormalizer,
     build_deeponet,
     compute_relative_l2,
+    save_checkpoint,
     train_deeponet,
 )
 from .openfoam_data import generate_split_datasets
@@ -69,6 +70,16 @@ def main() -> None:
         lbfgs_steps=cfg.lbfgs_steps,
         lbfgs_lr=cfg.lbfgs_lr,
     )
+    if cfg.save_trained_model:
+        checkpoint_path = Path(cfg.model_checkpoint_path)
+        save_checkpoint(
+            checkpoint_path,
+            model,
+            branch_normalizer=branch_normalizer,
+            trunk_normalizer=trunk_normalizer,
+            target_normalizer=target_normalizer,
+        )
+        print(f"Saved trained model checkpoint to: {checkpoint_path}")
 
     model.eval()
     split_metrics: dict[str, tuple[float, tuple[float, ...]]] = {}

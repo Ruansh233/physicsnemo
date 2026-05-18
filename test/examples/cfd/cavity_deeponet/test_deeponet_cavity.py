@@ -23,6 +23,10 @@ import pytest
 import torch
 
 from examples.cfd.cavity_deeponet.cavity_deeponet.splits import build_split_manifest
+from examples.cfd.cavity_deeponet.cavity_deeponet.modeling import (
+    load_checkpoint,
+    save_checkpoint,
+)
 from examples.cfd.cavity_deeponet.deeponet_cavity import (
     CavityCaseMetaData,
     CavityDeepONetConfig,
@@ -268,6 +272,42 @@ def test_build_deeponet_defaults():
     assert model.velocity_dim == 3
     assert model.out_features == 4
     assert model.output_channel_names == ("u", "v", "w", "p")
+
+
+def test_checkpoint_save_and_load_round_trip(tmp_path):
+    cfg = CavityDeepONetConfig()
+    model = build_deeponet(cfg)
+    branch = torch.tensor([[0.1], [0.2]], dtype=torch.float32)
+    trunk = torch.tensor([[0.0, 0.1, 0.2], [0.3, 0.4, 0.5]], dtype=torch.float32)
+    target = torch.tensor(
+        [[1.0, 2.0, 3.0, 4.0], [1.5, 2.5, 3.5, 4.5]], dtype=torch.float32
+    )
+    branch_norm = TensorNormalizer.fit(branch)
+    trunk_norm = TensorNormalizer.fit(trunk)
+    target_norm = TensorNormalizer.fit(target)
+
+    checkpoint_path = tmp_path / "deeponet_model.pt"
+    save_checkpoint(
+        checkpoint_path,
+        model,
+        branch_normalizer=branch_norm,
+        trunk_normalizer=trunk_norm,
+        target_normalizer=target_norm,
+    )
+
+    reloaded_model = build_deeponet(cfg)
+    loaded_branch, loaded_trunk, loaded_target = load_checkpoint(
+        checkpoint_path,
+        reloaded_model,
+        device="cpu",
+        dtype=torch.float32,
+    )
+    assert torch.allclose(loaded_branch.mean, branch_norm.mean)
+    assert torch.allclose(loaded_branch.std, branch_norm.std)
+    assert torch.allclose(loaded_trunk.mean, trunk_norm.mean)
+    assert torch.allclose(loaded_trunk.std, trunk_norm.std)
+    assert torch.allclose(loaded_target.mean, target_norm.mean)
+    assert torch.allclose(loaded_target.std, target_norm.std)
 
 
 def test_build_sample_tensors_shapes_and_pressure_last():
